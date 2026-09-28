@@ -7,7 +7,7 @@ import { ACTION_LABELS, bindKey, DEFAULT_KEYMAP, keyLabel, normalizeKey, unbindK
 import { useSettings } from '@/stores/settings';
 import { cn } from '@/lib/utils';
 
-const EDITABLE: PedalAction[] = ['next', 'prev', 'toggleChrome'];
+const EDITABLE: PedalAction[] = ['next', 'prev', 'nextSong', 'prevSong', 'toggleChrome'];
 
 /**
  * 페달 연결 확인·키 지정 + 보기 설정.
@@ -56,7 +56,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
           {EDITABLE.map((action) => (
             <div key={action} className="flex flex-wrap items-center gap-2">
               <div className="w-28 shrink-0 text-sm font-medium">{ACTION_LABELS[action]}</div>
-              {keymap[action].map((k) => (
+              {(keymap[action] ?? []).map((k) => (
                 <span key={k} className="inline-flex items-center gap-1 rounded-md bg-secondary py-1 pr-1 pl-2 text-sm">
                   {keyLabel(k)}
                   <button

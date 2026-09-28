@@ -1,16 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FilePlus2, MoreHorizontal, Pencil, RotateCcw, Search, Trash2 } from 'lucide-react';
+import { FilePlus2, Library, ListMusic, MoreHorizontal, Pencil, RotateCcw, Search, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { deleteScore, listScores, updateScore, type ScoreMeta } from '@/lib/db';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { deleteScore, listScores, updateScore, type ScoreMeta, type Setlist } from '@/lib/db';
+import { SetlistsView } from '@/features/setlist/SetlistsView';
 import { SMUFL } from '@/lib/smufl';
 import { cn } from '@/lib/utils';
 import { toast } from '@/stores/toast';
 import { importFiles } from './importFiles';
 
 type SortKey = 'recent' | 'title' | 'added';
+export type LibraryTab = 'scores' | 'setlists';
 
-export function LibraryScreen({ onOpen }: { onOpen: (id: string) => void }) {
+interface Props {
+  onOpen: (id: string) => void;
+  onPlaySetlist: (setlist: Setlist, index: number) => void;
+  tab: LibraryTab;
+  onTabChange: (tab: LibraryTab) => void;
+}
+
+export function LibraryScreen({ onOpen, onPlaySetlist, tab, onTabChange }: Props) {
   const [scores, setScores] = useState<ScoreMeta[] | null>(null);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortKey>('recent');
@@ -18,7 +28,9 @@ export function LibraryScreen({ onOpen }: { onOpen: (id: string) => void }) {
   const fileInput = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => setScores(await listScores()), []);
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   const handleFiles = async (files: File[]) => {
     if (await importFiles(files)) await refresh();
@@ -36,9 +48,18 @@ export function LibraryScreen({ onOpen }: { onOpen: (id: string) => void }) {
   return (
     <div
       className="min-h-full px-4 pt-safe pb-safe sm:px-8"
-      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-      onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false); }}
-      onDrop={(e) => { e.preventDefault(); setDragging(false); void handleFiles([...e.dataTransfer.files]); }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget === e.target) setDragging(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragging(false);
+        void handleFiles([...e.dataTransfer.files]);
+      }}
     >
       <header className="mx-auto mb-4 flex max-w-7xl flex-wrap items-center justify-between gap-4 py-5">
         <div className="flex items-center gap-3">
@@ -50,62 +71,80 @@ export function LibraryScreen({ onOpen }: { onOpen: (id: string) => void }) {
             <p className="text-xs text-muted-foreground">라이브 & 세션 연주자를 위한 악보 뷰어</p>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="relative">
-            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+        {tab === 'scores' && (
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="relative">
+              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="제목 검색"
+                className="h-10 w-48 rounded-md border bg-card pr-3 pl-9 text-sm outline-none focus:ring-2 focus:ring-ring/50 sm:w-60"
+              />
+            </label>
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as SortKey)}
+              className="h-10 rounded-md border bg-card px-3 text-sm"
+              aria-label="정렬"
+            >
+              <option value="recent">최근 연 순</option>
+              <option value="title">제목 순</option>
+              <option value="added">추가한 순</option>
+            </select>
+            <Button onClick={() => fileInput.current?.click()}>
+              <FilePlus2 /> 악보 가져오기
+            </Button>
             <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="제목 검색"
-              className="h-10 w-48 rounded-md border bg-card pr-3 pl-9 text-sm outline-none focus:ring-2 focus:ring-ring/50 sm:w-60"
+              ref={fileInput}
+              type="file"
+              accept="application/pdf,.pdf,image/*"
+              multiple
+              hidden
+              onChange={(e) => {
+                const files = [...(e.target.files ?? [])];
+                e.target.value = '';
+                void handleFiles(files);
+              }}
             />
-          </label>
-          <select
-            value={sort}
-            onChange={(e) => setSort(e.target.value as SortKey)}
-            className="h-10 rounded-md border bg-card px-3 text-sm"
-            aria-label="정렬"
-          >
-            <option value="recent">최근 연 순</option>
-            <option value="title">제목 순</option>
-            <option value="added">추가한 순</option>
-          </select>
-          <Button onClick={() => fileInput.current?.click()}>
-            <FilePlus2 /> 악보 가져오기
-          </Button>
-          <input
-            ref={fileInput}
-            type="file"
-            accept="application/pdf,.pdf,image/*"
-            multiple
-            hidden
-            onChange={(e) => {
-              const files = [...(e.target.files ?? [])];
-              e.target.value = '';
-              void handleFiles(files);
-            }}
-          />
-        </div>
+          </div>
+        )}
       </header>
 
-      {scores && scores.length === 0 && (
-        <div className="mx-auto max-w-md py-24 text-center">
-          <div className="font-music text-8xl text-muted-foreground/40" style={{ lineHeight: 1.6 }} aria-hidden>
-            {SMUFL.gClef}
-          </div>
-          <p className="mt-4 text-lg font-medium">아직 악보가 없습니다</p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            “악보 가져오기”로 파일 앱·iCloud Drive의 PDF나 악보 사진을 추가하세요. 사진 여러 장을 한 번에 고르면 한 곡으로 묶입니다.
-          </p>
-        </div>
-      )}
-
-      <div className="mx-auto grid max-w-7xl grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-x-5 gap-y-7 pb-10 sm:grid-cols-[repeat(auto-fill,minmax(170px,1fr))]">
-        {visible.map((s) => (
-          <ScoreCard key={s.id} score={s} onOpen={() => onOpen(s.id)} onChanged={refresh} />
-        ))}
+      <div className="mx-auto mb-5 max-w-7xl">
+        <ToggleGroup type="single" value={tab} onValueChange={(v) => v && onTabChange(v as LibraryTab)} className="w-full max-w-sm">
+          <ToggleGroupItem value="scores">
+            <Library /> 악보
+          </ToggleGroupItem>
+          <ToggleGroupItem value="setlists">
+            <ListMusic /> 세트리스트
+          </ToggleGroupItem>
+        </ToggleGroup>
       </div>
+
+      {tab === 'setlists' && <SetlistsView onPlay={onPlaySetlist} />}
+      {tab === 'scores' && (
+        <>
+          {scores && scores.length === 0 && (
+            <div className="mx-auto max-w-md py-24 text-center">
+              <div className="font-music text-8xl text-muted-foreground/40" style={{ lineHeight: 1.6 }} aria-hidden>
+                {SMUFL.gClef}
+              </div>
+              <p className="mt-4 text-lg font-medium">아직 악보가 없습니다</p>
+              <p className="mt-2 text-sm text-muted-foreground">
+                “악보 가져오기”로 파일 앱·iCloud Drive의 PDF나 악보 사진을 추가하세요. 사진 여러 장을 한 번에 고르면 한 곡으로 묶입니다.
+              </p>
+            </div>
+          )}
+
+          <div className="mx-auto grid max-w-7xl grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-x-5 gap-y-7 pb-10 sm:grid-cols-[repeat(auto-fill,minmax(170px,1fr))]">
+            {visible.map((s) => (
+              <ScoreCard key={s.id} score={s} onOpen={() => onOpen(s.id)} onChanged={refresh} />
+            ))}
+          </div>
+        </>
+      )}
 
       {dragging && (
         <div className="pointer-events-none fixed inset-3 z-40 flex items-center justify-center rounded-2xl border-4 border-dashed border-primary bg-primary/10 text-xl font-semibold">
@@ -118,7 +157,12 @@ export function LibraryScreen({ onOpen }: { onOpen: (id: string) => void }) {
 
 function ScoreCard({ score, onOpen, onChanged }: { score: ScoreMeta; onOpen: () => void; onChanged: () => void }) {
   const thumbUrl = useMemo(() => (score.thumb ? URL.createObjectURL(score.thumb) : null), [score.thumb]);
-  useEffect(() => () => { if (thumbUrl) URL.revokeObjectURL(thumbUrl); }, [thumbUrl]);
+  useEffect(
+    () => () => {
+      if (thumbUrl) URL.revokeObjectURL(thumbUrl);
+    },
+    [thumbUrl],
+  );
 
   const rename = async () => {
     const title = prompt('악보 이름', score.title);
@@ -161,9 +205,15 @@ function ScoreCard({ score, onOpen, onChanged }: { score: ScoreMeta; onOpen: () 
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={rename}><Pencil /> 이름 바꾸기</DropdownMenuItem>
-            <DropdownMenuItem onSelect={restart}><RotateCcw /> 처음부터 보기</DropdownMenuItem>
-            <DropdownMenuItem variant="destructive" onSelect={remove}><Trash2 /> 삭제</DropdownMenuItem>
+            <DropdownMenuItem onSelect={rename}>
+              <Pencil /> 이름 바꾸기
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={restart}>
+              <RotateCcw /> 처음부터 보기
+            </DropdownMenuItem>
+            <DropdownMenuItem variant="destructive" onSelect={remove}>
+              <Trash2 /> 삭제
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

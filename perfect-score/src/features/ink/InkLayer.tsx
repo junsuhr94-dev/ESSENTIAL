@@ -14,6 +14,7 @@ import {
   useInk,
   useInkSettings,
 } from '@/stores/ink';
+import { useSettings } from '@/stores/settings';
 import { drawStroke, strokeNode, symbolBox, symbolNode, textBox, textNode } from './nodes';
 import { groupingRadius, tryConvert } from './smartNotation';
 import { TEXT_FONT } from './glyphMetrics';
@@ -194,6 +195,8 @@ export function InkLayer({ page, width, height, raster }: Props) {
     };
 
     const onDown = (e: PointerEvent) => {
+      // 공연 모드: 필기는 보이기만 하고 입력은 받지 않는다(펜슬 터치도 페이지 넘김 제스처로).
+      if (useSettings.getState().performanceMode) return;
       const st = useInkSettings.getState();
       const { annotating: on } = useInk.getState();
       const isPen = e.pointerType === 'pen';

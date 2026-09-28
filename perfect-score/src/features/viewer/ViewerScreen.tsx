@@ -2,18 +2,26 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronLeft,
   Columns2,
+  CornerDownRight,
   Keyboard,
   Loader2,
+  Lock,
   MoveHorizontal,
   MoveVertical,
+  Palette,
   PenLine,
   RectangleVertical,
+  SkipBack,
+  SkipForward,
   SplitSquareVertical,
+  Timer,
+  Unlock,
   Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
@@ -25,28 +33,23 @@ import { Slider } from '@/components/ui/slider';
 import { openSource } from '@/core/document/openSource';
 import type { ScoreSource } from '@/core/document/types';
 import { RenderCache } from '@/core/render/renderCache';
-import {
-  anchorPage,
-  convertStep,
-  describeView,
-  maxStep,
-  nextStep,
-  pageToStep,
-  stepToView,
-  visiblePages,
-  type Layout,
-} from '@/core/navigation/navigator';
+import { anchorPage, convertStep, describeView, maxStep, nextStep, pageToStep, stepToView, visiblePages, type Layout } from '@/core/navigation/navigator';
 import type { PedalAction } from '@/core/pedal/keymap';
-import { getScore, getScoreFiles, loadInk, updateScore, type ScoreMeta } from '@/lib/db';
 import { penRecentlyActive } from '@/core/input/penActivity';
-import { flushInk, useInk } from '@/stores/ink';
-import { InkToolbar } from '@/features/ink/InkToolbar';
+import { sortBookmarks } from '@/core/setlist/setlist';
+import { getScore, getScoreFiles, loadInk, updateScore, type Bookmark, type ScoreMeta } from '@/lib/db';
 import { cn } from '@/lib/utils';
+import { flushInk, useInk } from '@/stores/ink';
+import { PAGE_THEMES, TURN_MODE_LABELS, useSettings, type LayoutPref, type PageTheme, type TurnMode } from '@/stores/settings';
+import { toast } from '@/stores/toast';
 import { useElementSize } from '@/hooks/useElementSize';
 import { usePageTurner } from '@/hooks/usePageTurner';
 import { useWakeLock } from '@/hooks/useWakeLock';
-import { TURN_MODE_LABELS, useSettings, type LayoutPref, type TurnMode } from '@/stores/settings';
-import { toast } from '@/stores/toast';
+import { InkToolbar } from '@/features/ink/InkToolbar';
+import { BeatDots, BeatFlash, MetronomePanel, useMetronome } from '@/features/metronome/MetronomePanel';
+import { CropStore } from './cropStore';
+import { NO_CROP } from './frame';
+import { JumpDialog } from './JumpDialog';
 import { PagedView } from './PagedView';
 import { ScrollView, type ScrollViewHandle } from './ScrollView';
 import { SettingsDialog } from './SettingsDialog';
@@ -54,14 +57,33 @@ import { SettingsDialog } from './SettingsDialog';
 const CACHE_CAPACITY = 8;
 const TURN_ICONS: Record<TurnMode, typeof Zap> = { instant: Zap, half: SplitSquareVertical, 'scroll-h': MoveHorizontal, 'scroll-v': MoveVertical };
 const LAYOUT_LABELS: Record<LayoutPref, string> = { auto: '자동 (가로 = 두 쪽)', single: '한 쪽', double: '두 쪽' };
+/** 마지막 페이지에서 다음 곡으로 넘어가려면 이 시간 안에 한 번 더 넘겨야 한다(실수 방지) */
+const NEXT_SONG_ARM_MS = 3000;
+/** 공연 모드에서 메뉴를 여는 길게 누르기 시간 */
+const LONG_PRESS_MS = 650;
+
+/** 세트리스트로 연 경우의 곡 정보 */
+export interface SetlistContext {
+  name: string;
+  songs: { id: string; title: string }[];
+  index: number;
+  onSong: (index: number) => void;
+}
 
 interface Loaded {
   meta: ScoreMeta;
   source: ScoreSource;
   cache: RenderCache;
+  crops: CropStore;
 }
 
-export function ViewerScreen({ scoreId, onClose }: { scoreId: string; onClose: () => void }) {
+interface ScreenProps {
+  scoreId: string;
+  onClose: () => void;
+  setlist?: SetlistContext;
+}
+
+export function ViewerScreen({ scoreId, onClose, setlist }: ScreenProps) {
   const [doc, setDoc] = useState<Loaded | null>(null);
 
   useEffect(() => {
@@ -71,7 +93,7 @@ export function ViewerScreen({ scoreId, onClose }: { scoreId: string; onClose: (
       const [meta, blobs, ink] = await Promise.all([getScore(scoreId), getScoreFiles(scoreId), loadInk(scoreId)]);
       if (!meta || !blobs?.length) throw new Error('missing score');
       const source = await openSource(meta.kind, blobs);
-      loaded = { meta, source, cache: new RenderCache(source, CACHE_CAPACITY) };
+      loaded = { meta, source, cache: new RenderCache(source, CACHE_CAPACITY), crops: new CropStore(source, scoreId, meta.crops) };
       if (cancelled) return dispose(loaded);
       useInk.getState().load(scoreId, ink);
       setDoc(loaded);
@@ -89,12 +111,13 @@ export function ViewerScreen({ scoreId, onClose }: { scoreId: string; onClose: (
 
   if (!doc) {
     return (
-      <div className="fixed inset-0 flex items-center justify-center bg-stage">
-        <Loader2 className="size-8 animate-spin text-white/60" />
+      <div className="fixed inset-0 flex flex-col items-center justify-center gap-3 bg-stage text-white/70">
+        <Loader2 className="size-8 animate-spin" />
+        {setlist && <div className="text-sm">{setlist.index + 1}/{setlist.songs.length} · {setlist.songs[setlist.index]?.title}</div>}
       </div>
     );
   }
-  return <Viewer doc={doc} onClose={onClose} />;
+  return <Viewer doc={doc} onClose={onClose} setlist={setlist} />;
 }
 
 function dispose({ source, cache }: Loaded) {
@@ -104,10 +127,11 @@ function dispose({ source, cache }: Loaded) {
   source.destroy();
 }
 
-function Viewer({ doc, onClose }: { doc: Loaded; onClose: () => void }) {
+function Viewer({ doc, onClose, setlist }: { doc: Loaded; onClose: () => void; setlist?: SetlistContext }) {
   const { meta, source, cache } = doc;
   const pageCount = source.pageCount;
-  const { layout: layoutPref, turnMode, halfSplit, keymap, tapToTurn, set } = useSettings();
+  const { layout: layoutPref, turnMode, halfSplit, keymap, tapToTurn, pageTheme, dim, performanceMode, set } = useSettings();
+  const theme = PAGE_THEMES[pageTheme];
 
   const stageRef = useRef<HTMLDivElement>(null);
   const { width, height } = useElementSize(stageRef);
@@ -115,10 +139,13 @@ function Viewer({ doc, onClose }: { doc: Loaded; onClose: () => void }) {
   const scrollMode = turnMode === 'scroll-h' || turnMode === 'scroll-v';
   const pagedMode = turnMode === 'half' ? 'half' : 'instant';
 
+  // 세트리스트로 열면 항상 첫 페이지부터, 아니면 이어보기
+  const startPage = setlist ? 1 : meta.lastPage || 1;
+
   // 현재 위치: 넘김 모드에서는 step, 스크롤 모드에서는 page 를 기준으로 한다.
   // step 은 그것이 계산된 레이아웃과 함께 저장한다. 기기 회전 등으로 레이아웃이 바뀌면
   // 렌더링 중에 바로 변환하므로 잘못된 화면이 한 프레임도 보이지 않고, 보던 페이지가 유지된다.
-  const [pos, setPos] = useState(() => ({ step: pageToStep(meta.lastPage || 1, pageCount, layout), layout }));
+  const [pos, setPos] = useState(() => ({ step: pageToStep(startPage, pageCount, layout), layout }));
   const step = pos.layout === layout ? pos.step : convertStep(pos.step, pageCount, pos.layout, layout);
   const setStep = useCallback(
     (update: number | ((k: number) => number)) =>
@@ -128,13 +155,19 @@ function Viewer({ doc, onClose }: { doc: Loaded; onClose: () => void }) {
       }),
     [layout, pageCount],
   );
-  const [scrollPage, setScrollPage] = useState(meta.lastPage || 1);
-  const [chrome, setChrome] = useState(true);
+  const [scrollPage, setScrollPage] = useState(startPage);
+  const [chrome, setChrome] = useState(!performanceMode);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [jumpOpen, setJumpOpen] = useState(false);
+  const [metronomeOpen, setMetronomeOpen] = useState(false);
   const annotating = useInk((s) => s.annotating);
   const setAnnotating = useInk((s) => s.setAnnotating);
   const [sliderPreview, setSliderPreview] = useState<number | null>(null);
   const scrollRef = useRef<ScrollViewHandle>(null);
+
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>(meta.bookmarks ?? []);
+  const [autoCrop, setAutoCrop] = useState(!!meta.autoCrop);
+  const metronome = useMetronome(meta.id, meta.bpm ?? 100, meta.beats ?? 4);
 
   useWakeLock(true);
 
@@ -149,11 +182,65 @@ function Viewer({ doc, onClose }: { doc: Loaded; onClose: () => void }) {
     [step, pagedMode, pageCount, layout],
   );
 
+  // 여백 자르기(넘김 모드): 켜면 전체 페이지를 한가할 때 미리 계산해 둔다.
+  const crop = autoCrop && !scrollMode ? doc.crops.get : NO_CROP;
+  useEffect(() => {
+    if (!autoCrop) return;
+    const signal = { cancelled: false };
+    void doc.crops.warmUp(signal);
+    return () => { signal.cancelled = true; };
+  }, [autoCrop, doc.crops]);
+
   // 이어보기 위치 저장
   useEffect(() => {
     const t = setTimeout(() => void updateScore(meta.id, { lastPage: anchor }), 600);
     return () => clearTimeout(t);
   }, [anchor, meta.id]);
+
+  // 공연 모드로 들어가면 필기·메뉴를 닫는다.
+  useEffect(() => {
+    if (performanceMode) {
+      setAnnotating(false);
+      setChrome(false);
+    }
+  }, [performanceMode, setAnnotating]);
+
+  // ---- 세트리스트: 끝에서 한 번 더 넘기면 다음 곡 ----
+  const armed = useRef<{ dir: 1 | -1; until: number } | null>(null);
+  const songAt = (dir: 1 | -1) => (setlist ? setlist.songs[setlist.index + dir] : undefined);
+  const switchSong = useCallback(
+    (dir: 1 | -1) => {
+      if (!setlist) return;
+      const target = setlist.index + dir;
+      if (target < 0 || target >= setlist.songs.length) {
+        toast(dir > 0 ? '세트리스트의 마지막 곡입니다' : '세트리스트의 첫 곡입니다', 1500);
+        return;
+      }
+      metronome.stop();
+      setlist.onSong(target);
+    },
+    [setlist, metronome],
+  );
+
+  const atEdge = useCallback(
+    (dir: 1 | -1) => {
+      const song = songAt(dir);
+      if (!song) {
+        toast(dir > 0 ? '마지막 페이지입니다' : '첫 페이지입니다', 1200);
+        return;
+      }
+      const now = performance.now();
+      if (armed.current && armed.current.dir === dir && armed.current.until > now) {
+        armed.current = null;
+        switchSong(dir);
+      } else {
+        armed.current = { dir, until: now + NEXT_SONG_ARM_MS };
+        toast(`${dir > 0 ? '다음' : '이전'} 곡: ${song.title} — 한 번 더 넘기면 이동합니다`, NEXT_SONG_ARM_MS);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [setlist, switchSong],
+  );
 
   const turn = useCallback(
     (dir: 1 | -1) => {
@@ -162,13 +249,14 @@ function Viewer({ doc, onClose }: { doc: Loaded; onClose: () => void }) {
         else scrollRef.current?.prev();
         return;
       }
-      setStep((k) => {
-        const n = nextStep(k, dir, pagedMode, pageCount, layout);
-        if (n === k) toast(dir > 0 ? '마지막 페이지입니다' : '첫 페이지입니다', 1200);
-        return n;
-      });
+      const n = nextStep(step, dir, pagedMode, pageCount, layout);
+      if (n === step) atEdge(dir);
+      else {
+        armed.current = null;
+        setStep(n);
+      }
     },
-    [scrollMode, pagedMode, pageCount, layout, setStep],
+    [scrollMode, step, pagedMode, pageCount, layout, setStep, atEdge],
   );
 
   const goToPage = useCallback(
@@ -187,6 +275,23 @@ function Viewer({ doc, onClose }: { doc: Loaded; onClose: () => void }) {
     set({ turnMode: mode });
   };
 
+  const updateBookmarks = (next: Bookmark[]) => {
+    setBookmarks(next);
+    void updateScore(meta.id, { bookmarks: next });
+  };
+
+  const toggleAutoCrop = (on: boolean) => {
+    setAutoCrop(on);
+    void updateScore(meta.id, { autoCrop: on });
+    if (on && scrollMode) toast('여백 자르기는 즉시 전환·반 페이지 넘김에서 적용됩니다.', 2500);
+  };
+
+  const togglePerformance = () => {
+    const on = !performanceMode;
+    set({ performanceMode: on });
+    toast(on ? '공연 모드 — 필기가 잠기고, 화면을 길게 누르면 메뉴가 열립니다' : '공연 모드 해제', 2500);
+  };
+
   const onPedal = useCallback(
     (action: PedalAction) => {
       if (action === 'next') turn(1);
@@ -194,27 +299,63 @@ function Viewer({ doc, onClose }: { doc: Loaded; onClose: () => void }) {
       else if (action === 'first') goToPage(1);
       else if (action === 'last') goToPage(pageCount);
       else if (action === 'toggleChrome') setChrome((c) => !c);
+      else if (action === 'nextSong') switchSong(1);
+      else if (action === 'prevSong') switchSong(-1);
     },
-    [turn, goToPage, pageCount],
+    [turn, goToPage, pageCount, switchSong],
   );
-  usePageTurner(keymap, onPedal, !settingsOpen);
+  const dialogsOpen = settingsOpen || jumpOpen;
+  usePageTurner(keymap, onPedal, !dialogsOpen);
 
-  // ---- 터치: 좌우 탭 / 스와이프 / 가운데 탭 ----
-  const gesture = useRef<{ id: number; x: number; y: number; t: number; multi: boolean } | null>(null);
+  // 숫자 키 1~9: 북마크로 바로 이동 (페달 키로 지정되지 않은 경우)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (dialogsOpen || e.metaKey || e.ctrlKey || e.altKey) return;
+      if ((e.target as HTMLElement)?.closest?.('input, textarea')) return;
+      const m = /^Digit([1-9])$/.exec(e.code);
+      if (!m || Object.values(keymap).some((keys) => keys?.includes(e.code))) return;
+      const bm = sortBookmarks(bookmarks)[Number(m[1]) - 1];
+      if (bm) {
+        e.preventDefault();
+        goToPage(bm.page);
+        toast(`🔖 ${bm.label}`, 1000);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [bookmarks, keymap, goToPage, dialogsOpen]);
+
+  // ---- 터치: 좌우 탭 / 스와이프 / 가운데 탭 / (공연 모드) 길게 누르기 ----
+  const gesture = useRef<{ id: number; x: number; y: number; t: number; multi: boolean; longPressed: boolean } | null>(null);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const onPointerDown = (e: React.PointerEvent) => {
     // Apple Pencil 로 쓰는 중에 닿은 손바닥은 무시
     if (e.pointerType === 'touch' && penRecentlyActive(e.timeStamp)) return;
     if (gesture.current) {
       gesture.current.multi = true;
+      clearTimeout(longPressTimer.current);
       return;
     }
-    gesture.current = { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp, multi: false };
+    const g = { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp, multi: false, longPressed: false };
+    gesture.current = g;
+    if (performanceMode) {
+      longPressTimer.current = setTimeout(() => {
+        if (gesture.current !== g || g.multi) return;
+        g.longPressed = true;
+        setChrome(true);
+      }, LONG_PRESS_MS);
+    }
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const g = gesture.current;
+    if (g && g.id === e.pointerId && Math.hypot(e.clientX - g.x, e.clientY - g.y) > 10) clearTimeout(longPressTimer.current);
   };
   const onPointerUp = (e: React.PointerEvent) => {
+    clearTimeout(longPressTimer.current);
     const g = gesture.current;
     if (!g || g.id !== e.pointerId) return;
     gesture.current = null;
-    if (g.multi) return;
+    if (g.multi || g.longPressed) return;
     const dx = e.clientX - g.x;
     const dy = e.clientY - g.y;
     const dt = e.timeStamp - g.t;
@@ -224,23 +365,29 @@ function Viewer({ doc, onClose }: { doc: Loaded; onClose: () => void }) {
     }
     if (Math.hypot(dx, dy) > 10 || dt > 500) return;
     const fx = (e.clientX - (stageRef.current?.getBoundingClientRect().left ?? 0)) / (width || 1);
-    if (!scrollMode && tapToTurn && fx < 0.28) turn(-1);
-    else if (!scrollMode && tapToTurn && fx > 0.72) turn(1);
-    else setChrome((c) => !c);
+    // 공연 모드에서는 가장자리(18%)만 넘김 영역으로 두어 악보를 짚다가 넘어가는 사고를 줄인다.
+    const edge = performanceMode ? 0.18 : 0.28;
+    if (!scrollMode && tapToTurn && fx < edge) turn(-1);
+    else if (!scrollMode && tapToTurn && fx > 1 - edge) turn(1);
+    else if (!performanceMode) setChrome((c) => !c);
+    else if (chrome) setChrome(false);
   };
 
   const label = scrollMode ? `${scrollPage} / ${pageCount}` : describeView(view, pageCount);
   const TurnIcon = TURN_ICONS[turnMode];
+  const nextSong = songAt(1);
 
   return (
-    <div className="fixed inset-0 overflow-hidden bg-stage text-white">
+    <div className="fixed inset-0 overflow-hidden text-white" style={{ background: theme.stage }}>
       <div
         ref={stageRef}
         className="no-callout absolute inset-0"
         style={{ touchAction: scrollMode ? (turnMode === 'scroll-h' ? 'pan-x' : 'pan-y') : 'none' }}
         onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={() => {
+          clearTimeout(longPressTimer.current);
           gesture.current = null;
         }}
         onContextMenu={(e) => e.preventDefault()}
@@ -256,27 +403,59 @@ function Viewer({ doc, onClose }: { doc: Loaded; onClose: () => void }) {
             height={height}
             initialPage={scrollPage}
             onPageChange={setScrollPage}
-            onEdge={(edge) => toast(edge === 'end' ? '마지막 페이지입니다' : '첫 페이지입니다', 1200)}
+            onEdge={(edge) => atEdge(edge === 'end' ? 1 : -1)}
+            pageFilter={theme.filter}
           />
         ) : (
-          <PagedView source={source} cache={cache} view={view} neighbors={neighbors} width={width} height={height} split={halfSplit} />
+          <PagedView
+            source={source}
+            cache={cache}
+            view={view}
+            neighbors={neighbors}
+            width={width}
+            height={height}
+            split={halfSplit}
+            crop={crop}
+            pageFilter={theme.filter}
+          />
         )}
       </div>
 
+      {/* 디밍: 어두운 무대에서 화면 밝기를 더 낮춘다 */}
+      {dim > 0 && <div className="pointer-events-none absolute inset-0 z-[5] bg-black" style={{ opacity: dim }} />}
+      {metronome.running && !metronome.sound && <BeatFlash beat={metronome.beat} beats={metronome.beats} tick={metronome.tick} />}
+
       {/* 상단 바 + 필기 도구 막대 (필기 중에는 메뉴를 숨겨도 도구 막대는 남는다) */}
       <div className="absolute inset-x-0 top-0 z-10 flex flex-col">
-        <header
-          className={cn('flex items-center gap-2 bg-black/75 px-2 pt-safe pb-2 backdrop-blur-md transition-all duration-200', !chrome && 'hidden')}
-        >
-          <Button variant="bar" onClick={onClose}>
-            <ChevronLeft /> 악보함
+        <header className={cn('flex items-center gap-1 bg-black/75 px-2 pt-safe pb-2 backdrop-blur-md sm:gap-2', !chrome && 'hidden')}>
+          <Button variant="bar" onClick={onClose} className="px-2 sm:px-4">
+            <ChevronLeft /> <span className="hidden sm:inline">{setlist ? '세트리스트' : '악보함'}</span>
           </Button>
-          <div className="min-w-0 flex-1 truncate text-center font-semibold">{meta.title}</div>
+          <div className="min-w-0 flex-1 text-center">
+            <div className="truncate font-semibold">{meta.title}</div>
+            {setlist && (
+              <div className="truncate text-xs text-white/60">
+                {setlist.name} · {setlist.index + 1}/{setlist.songs.length}
+                {nextSong ? ` · 다음: ${nextSong.title}` : ' · 마지막 곡'}
+              </div>
+            )}
+          </div>
+
+          {setlist && (
+            <>
+              <Button variant="bar" size="icon" aria-label="이전 곡" disabled={setlist.index === 0} onClick={() => switchSong(-1)}>
+                <SkipBack />
+              </Button>
+              <Button variant="bar" size="icon" aria-label="다음 곡" disabled={!nextSong} onClick={() => switchSong(1)}>
+                <SkipForward />
+              </Button>
+            </>
+          )}
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="bar" aria-label="넘김 방식">
-                <TurnIcon /> <span className="hidden sm:inline">{TURN_MODE_LABELS[turnMode].title}</span>
+              <Button variant="bar" size="icon" aria-label="넘김 방식" title={TURN_MODE_LABELS[turnMode].title}>
+                <TurnIcon />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-72">
@@ -289,51 +468,103 @@ function Viewer({ doc, onClose }: { doc: Loaded; onClose: () => void }) {
                   </DropdownMenuRadioItem>
                 ))}
               </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="bar" aria-label="페이지 배치" disabled={scrollMode}>
-                {layout === 'double' ? <Columns2 /> : <RectangleVertical />}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>페이지 배치</DropdownMenuLabel>
               <DropdownMenuSeparator />
+              <DropdownMenuLabel>페이지 배치</DropdownMenuLabel>
               <DropdownMenuRadioGroup value={layoutPref} onValueChange={(v) => set({ layout: v as LayoutPref })}>
                 {(Object.keys(LAYOUT_LABELS) as LayoutPref[]).map((l) => (
-                  <DropdownMenuRadioItem key={l} value={l}>
-                    {LAYOUT_LABELS[l]}
+                  <DropdownMenuRadioItem key={l} value={l} disabled={scrollMode}>
+                    {l === 'double' ? <Columns2 /> : l === 'single' ? <RectangleVertical /> : null} {LAYOUT_LABELS[l]}
                   </DropdownMenuRadioItem>
                 ))}
               </DropdownMenuRadioGroup>
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <Button variant="bar" size="icon" aria-label="페달 & 보기 설정" onClick={() => setSettingsOpen(true)}>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="bar" size="icon" aria-label="화면 설정">
+                <Palette />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-72">
+              <DropdownMenuLabel>악보 색</DropdownMenuLabel>
+              <DropdownMenuRadioGroup value={pageTheme} onValueChange={(v) => set({ pageTheme: v as PageTheme })}>
+                {(Object.keys(PAGE_THEMES) as PageTheme[]).map((t) => (
+                  <DropdownMenuRadioItem key={t} value={t} className="flex-col items-start gap-0">
+                    <span>{PAGE_THEMES[t].title}</span>
+                    <span className="text-xs text-muted-foreground">{PAGE_THEMES[t].desc}</span>
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+              <DropdownMenuSeparator />
+              <div className="px-3 py-2" onPointerDown={(e) => e.stopPropagation()}>
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>화면 어둡게</span>
+                  <span>{Math.round(dim * 100)}%</span>
+                </div>
+                <Slider min={0} max={80} step={5} value={[Math.round(dim * 100)]} onValueChange={([v]) => set({ dim: v / 100 })} />
+              </div>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem checked={autoCrop} onCheckedChange={(v) => toggleAutoCrop(!!v)} onSelect={(e) => e.preventDefault()}>
+                <span className="flex flex-col">
+                  <span>여백 자르기</span>
+                  <span className="text-xs text-muted-foreground">악보 바깥 흰 여백을 잘라 크게 보기 (이 곡)</span>
+                </span>
+              </DropdownMenuCheckboxItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <Button variant="bar" size="icon" aria-label="빠른 이동·북마크" onClick={() => setJumpOpen(true)}>
+            <CornerDownRight />
+          </Button>
+
+          <Button variant="bar" size="icon" aria-label="메트로놈" data-active={metronome.running} onClick={() => setMetronomeOpen((o) => !o)}>
+            <Timer />
+          </Button>
+
+          <Button variant="bar" size="icon" aria-label="페달 & 보기 설정" onClick={() => setSettingsOpen(true)} className="hidden sm:inline-flex">
             <Keyboard />
           </Button>
 
-          <Button variant="bar" data-active={annotating} aria-pressed={annotating} onClick={() => setAnnotating(!annotating)}>
-            <PenLine /> <span className="hidden sm:inline">필기</span>
+          <Button variant="bar" size="icon" aria-label={performanceMode ? '공연 모드 해제' : '공연 모드'} data-active={performanceMode} onClick={togglePerformance}>
+            {performanceMode ? <Lock /> : <Unlock />}
           </Button>
+
+          {!performanceMode && (
+            <Button variant="bar" data-active={annotating} aria-pressed={annotating} onClick={() => setAnnotating(!annotating)}>
+              <PenLine /> <span className="hidden lg:inline">필기</span>
+            </Button>
+          )}
         </header>
-        {annotating && (
+        {annotating && !performanceMode && (
           <div className={cn(!chrome && 'bg-black/70 pt-safe')}>
             <InkToolbar visiblePages={scrollMode ? [scrollPage] : visiblePages(view)} onReveal={goToPage} />
           </div>
         )}
       </div>
 
-      {/* 페이지 표시 */}
+      {/* 메트로놈 패널 */}
+      {metronomeOpen && (
+        <div className="absolute top-[calc(env(safe-area-inset-top)+4rem)] right-3 z-20">
+          <MetronomePanel m={metronome} onClose={() => setMetronomeOpen(false)} />
+        </div>
+      )}
+
+      {/* 페이지 표시 (+ 메트로놈 박) */}
       <div
         className={cn(
-          'pointer-events-none absolute left-1/2 z-10 -translate-x-1/2 rounded-full bg-black/70 px-4 py-1.5 text-sm tabular-nums transition-all duration-200',
+          'pointer-events-none absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-3 rounded-full bg-black/70 px-4 py-1.5 text-sm tabular-nums transition-all duration-200',
           chrome ? 'bottom-[calc(env(safe-area-inset-bottom)+4.5rem)]' : 'bottom-[calc(env(safe-area-inset-bottom)+0.75rem)] opacity-60',
         )}
       >
-        {sliderPreview != null ? `${sliderPreview} / ${pageCount}` : label}
+        {performanceMode && <Lock className="size-3.5 text-primary" />}
+        <span>{sliderPreview != null ? `${sliderPreview} / ${pageCount}` : label}</span>
+        {metronome.running && (
+          <span className="flex items-center gap-2 border-l border-white/20 pl-3">
+            <span className="text-xs text-white/70">♩={metronome.bpm}</span>
+            <BeatDots beats={metronome.beats} beat={metronome.beat} />
+          </span>
+        )}
       </div>
 
       {/* 하단 바: 페이지 이동 슬라이더 */}
@@ -361,6 +592,15 @@ function Viewer({ doc, onClose }: { doc: Loaded; onClose: () => void }) {
       </footer>
 
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <JumpDialog
+        open={jumpOpen}
+        onOpenChange={setJumpOpen}
+        pageCount={pageCount}
+        currentPage={anchor}
+        bookmarks={bookmarks}
+        onBookmarksChange={updateBookmarks}
+        onGo={goToPage}
+      />
     </div>
   );
 }

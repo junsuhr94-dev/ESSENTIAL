@@ -2,7 +2,7 @@
 
 ## 📁 perfect-score/
 
-**Perfect Score** — 라이브 공연·세션 연주자를 위한 iPad 악보 뷰어 & 스마트 필기 앱.
+**Perfect Score** — 라이브 공연·세션 연주자를 위한 iPad 악보 뷰어 & 스마트 필기 앱 (1~3단계 완료: 페달·반 페이지 넘김, 스마트 필기, 세트리스트·공연 모드·메트로놈).
 프로젝트 전체가 [`perfect-score/`](perfect-score/) 폴더 안에 있습니다. 자세한 내용은 [perfect-score/README.md](perfect-score/README.md)를 보세요.
 
 ### 바탕화면에 “perfect score” 폴더로 받기

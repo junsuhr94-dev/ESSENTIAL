@@ -10,7 +10,7 @@
  * 제조사 전용 모드(미디어 키 등)는 브라우저로 전달되지 않으므로 페달을 위 모드 중 하나로 설정해야 한다.
  */
 
-export type PedalAction = 'next' | 'prev' | 'first' | 'last' | 'toggleChrome';
+export type PedalAction = 'next' | 'prev' | 'first' | 'last' | 'toggleChrome' | 'nextSong' | 'prevSong';
 
 export type Keymap = Record<PedalAction, string[]>;
 
@@ -20,6 +20,9 @@ export const DEFAULT_KEYMAP: Keymap = {
   first: ['Home'],
   last: ['End'],
   toggleChrome: [],
+  // 세트리스트: 4페달 페이지 터너의 3·4번 페달 등에 지정해 쓴다. 키보드는 ] / [
+  nextSong: ['BracketRight'],
+  prevSong: ['BracketLeft'],
 };
 
 export const ACTION_LABELS: Record<PedalAction, string> = {
@@ -28,6 +31,8 @@ export const ACTION_LABELS: Record<PedalAction, string> = {
   first: '처음으로',
   last: '끝으로',
   toggleChrome: '메뉴 표시/숨기기',
+  nextSong: '다음 곡',
+  prevSong: '이전 곡',
 };
 
 export interface KeyLike {
@@ -69,7 +74,7 @@ export function resolveAction(e: KeyLike, keymap: Keymap): PedalAction | null {
   if (e.metaKey || e.ctrlKey || e.altKey) return null;
   const key = normalizeKey(e);
   for (const action of Object.keys(keymap) as PedalAction[]) {
-    if (keymap[action].includes(key)) return action;
+    if (keymap[action]?.includes(key)) return action;
   }
   return null;
 }
@@ -78,17 +83,19 @@ export function resolveAction(e: KeyLike, keymap: Keymap): PedalAction | null {
 export function bindKey(keymap: Keymap, action: PedalAction, key: string): Keymap {
   const out = {} as Keymap;
   for (const a of Object.keys(keymap) as PedalAction[]) {
-    out[a] = keymap[a].filter((k) => k !== key);
+    out[a] = (keymap[a] ?? []).filter((k) => k !== key);
   }
-  if (!out[action].includes(key)) out[action] = [...out[action], key];
+  out[action] = [...(out[action] ?? []), key];
   return out;
 }
 
 export function unbindKey(keymap: Keymap, action: PedalAction, key: string): Keymap {
-  return { ...keymap, [action]: keymap[action].filter((k) => k !== key) };
+  return { ...keymap, [action]: (keymap[action] ?? []).filter((k) => k !== key) };
 }
 
 const KEY_LABELS: Record<string, string> = {
+  BracketRight: ']',
+  BracketLeft: '[',
   ArrowRight: '→',
   ArrowLeft: '←',
   ArrowUp: '↑',

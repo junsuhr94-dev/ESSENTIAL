@@ -21,6 +21,8 @@ interface Props {
   initialPage: number;
   onPageChange: (page: number) => void;
   onEdge?: (edge: 'start' | 'end') => void;
+  /** 악보 색 테마(CSS filter) */
+  pageFilter?: string;
 }
 
 const GAP = 12;
@@ -33,7 +35,7 @@ interface Placed { page: number; x: number; y: number; w: number; h: number }
  * 가로/세로 부드러운 스크롤 보기.
  * 보이는 범위(+앞뒤 여유) 페이지만 렌더링해 긴 악보에서도 메모리를 아낀다.
  */
-export function ScrollView({ ref, source, cache, direction, width, height, initialPage, onPageChange, onEdge }: Props) {
+export function ScrollView({ ref, source, cache, direction, width, height, initialPage, onPageChange, onEdge, pageFilter }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const [sizes, setSizes] = useState<PageSize[] | null>(null);
   const [range, setRange] = useState<[number, number]>([1, 1]);
@@ -196,7 +198,7 @@ export function ScrollView({ ref, source, cache, direction, width, height, initi
             <div
               key={p.page}
               className="absolute overflow-hidden bg-white shadow-xl shadow-black/50"
-              style={{ left: p.x, top: p.y, width: p.w, height: p.h, scrollSnapAlign: direction === 'horizontal' ? 'center' : undefined }}
+              style={{ left: p.x, top: p.y, width: p.w, height: p.h, filter: pageFilter, scrollSnapAlign: direction === 'horizontal' ? 'center' : undefined }}
             >
               {canvas && <CanvasHost canvas={canvas} />}
               {canvas && <InkLayer page={p.page} width={p.w} height={p.h} raster={canvas} />}
