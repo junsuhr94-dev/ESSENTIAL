@@ -1,0 +1,17 @@
+{
+  "name": "악보 뷰어",
+  "short_name": "악보",
+  "description": "아이패드용 PDF 악보 뷰어 — 페이지 넘김, 블루투스 페달, Apple Pencil 필기",
+  "lang": "ko",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1f2430",
+  "theme_color": "#1f2430",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
