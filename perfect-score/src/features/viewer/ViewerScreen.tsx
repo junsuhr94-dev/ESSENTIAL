@@ -14,6 +14,7 @@ import {
   SkipBack,
   SkipForward,
   SplitSquareVertical,
+  Share,
   Timer,
   Unlock,
   Zap,
@@ -30,14 +31,22 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Slider } from '@/components/ui/slider';
-import { openSource } from '@/core/document/openSource';
-import type { ScoreSource } from '@/core/document/types';
-import { RenderCache } from '@/core/render/renderCache';
-import { anchorPage, convertStep, describeView, maxStep, nextStep, pageToStep, stepToView, visiblePages, type Layout } from '@/core/navigation/navigator';
+import {
+  anchorPage,
+  convertStep,
+  describeView,
+  maxStep,
+  nextStep,
+  pageToStep,
+  stepToView,
+  visiblePages,
+  type Layout,
+} from '@/core/navigation/navigator';
 import type { PedalAction } from '@/core/pedal/keymap';
 import { penRecentlyActive } from '@/core/input/penActivity';
 import { sortBookmarks } from '@/core/setlist/setlist';
-import { getScore, getScoreFiles, loadInk, updateScore, type Bookmark, type ScoreMeta } from '@/lib/db';
+import { updateScore, type Bookmark } from '@/lib/db';
+import { saveFile } from '@/lib/share';
 import { cn } from '@/lib/utils';
 import { flushInk, useInk } from '@/stores/ink';
 import { PAGE_THEMES, TURN_MODE_LABELS, useSettings, type LayoutPref, type PageTheme, type TurnMode } from '@/stores/settings';
@@ -47,14 +56,13 @@ import { usePageTurner } from '@/hooks/usePageTurner';
 import { useWakeLock } from '@/hooks/useWakeLock';
 import { InkToolbar } from '@/features/ink/InkToolbar';
 import { BeatDots, BeatFlash, MetronomePanel, useMetronome } from '@/features/metronome/MetronomePanel';
-import { CropStore } from './cropStore';
-import { NO_CROP } from './frame';
+import { layoutFrame, NO_CROP, renderDpr, resolveFrame } from './frame';
+import { clearPreloaded, disposeScore, loadScore, preloadScore, takePreloaded, type LoadedScore } from './loadScore';
 import { JumpDialog } from './JumpDialog';
 import { PagedView } from './PagedView';
 import { ScrollView, type ScrollViewHandle } from './ScrollView';
 import { SettingsDialog } from './SettingsDialog';
 
-const CACHE_CAPACITY = 8;
 const TURN_ICONS: Record<TurnMode, typeof Zap> = { instant: Zap, half: SplitSquareVertical, 'scroll-h': MoveHorizontal, 'scroll-v': MoveVertical };
 const LAYOUT_LABELS: Record<LayoutPref, string> = { auto: '자동 (가로 = 두 쪽)', single: '한 쪽', double: '두 쪽' };
 /** 마지막 페이지에서 다음 곡으로 넘어가려면 이 시간 안에 한 번 더 넘겨야 한다(실수 방지) */
@@ -70,12 +78,7 @@ export interface SetlistContext {
   onSong: (index: number) => void;
 }
 
-interface Loaded {
-  meta: ScoreMeta;
-  source: ScoreSource;
-  cache: RenderCache;
-  crops: CropStore;
-}
+type Loaded = LoadedScore;
 
 interface ScreenProps {
   scoreId: string;
@@ -90,12 +93,10 @@ export function ViewerScreen({ scoreId, onClose, setlist }: ScreenProps) {
     let cancelled = false;
     let loaded: Loaded | null = null;
     (async () => {
-      const [meta, blobs, ink] = await Promise.all([getScore(scoreId), getScoreFiles(scoreId), loadInk(scoreId)]);
-      if (!meta || !blobs?.length) throw new Error('missing score');
-      const source = await openSource(meta.kind, blobs);
-      loaded = { meta, source, cache: new RenderCache(source, CACHE_CAPACITY), crops: new CropStore(source, scoreId, meta.crops) };
+      // 세트리스트에서 미리 열어 둔 곡이면 바로 쓴다.
+      loaded = await (takePreloaded(scoreId) ?? loadScore(scoreId));
       if (cancelled) return dispose(loaded);
-      useInk.getState().load(scoreId, ink);
+      useInk.getState().load(scoreId, loaded.ink);
       setDoc(loaded);
       void updateScore(scoreId, { openedAt: Date.now() });
     })().catch((err) => {
@@ -113,18 +114,21 @@ export function ViewerScreen({ scoreId, onClose, setlist }: ScreenProps) {
     return (
       <div className="fixed inset-0 flex flex-col items-center justify-center gap-3 bg-stage text-white/70">
         <Loader2 className="size-8 animate-spin" />
-        {setlist && <div className="text-sm">{setlist.index + 1}/{setlist.songs.length} · {setlist.songs[setlist.index]?.title}</div>}
+        {setlist && (
+          <div className="text-sm">
+            {setlist.index + 1}/{setlist.songs.length} · {setlist.songs[setlist.index]?.title}
+          </div>
+        )}
       </div>
     );
   }
   return <Viewer doc={doc} onClose={onClose} setlist={setlist} />;
 }
 
-function dispose({ source, cache }: Loaded) {
+function dispose(loaded: Loaded) {
   void flushInk();
   useInk.getState().unload();
-  cache.destroy();
-  source.destroy();
+  disposeScore(loaded);
 }
 
 function Viewer({ doc, onClose, setlist }: { doc: Loaded; onClose: () => void; setlist?: SetlistContext }) {
@@ -171,6 +175,47 @@ function Viewer({ doc, onClose, setlist }: { doc: Loaded; onClose: () => void; s
 
   useWakeLock(true);
 
+  // 세트리스트: 이 곡이 뜨고 잠시 뒤 다음 곡을 미리 열고 첫 화면까지 그려 둔다 → 곡 전환이 즉시 이뤄진다.
+  const nextSongId = setlist?.songs[setlist.index + 1]?.id;
+  useEffect(() => {
+    if (!nextSongId || !width || !height) return;
+    const t = setTimeout(() => {
+      preloadScore(nextSongId, async (next) => {
+        if (scrollMode) return;
+        const n = next.source.pageCount;
+        const view = stepToView(pageToStep(1, n, layout), n, layout);
+        const crop = next.meta.autoCrop ? next.crops.get : NO_CROP;
+        await resolveFrame(await layoutFrame(next.source, view, width, height, halfSplit, crop), next.cache, renderDpr());
+      });
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [nextSongId, width, height, layout, halfSplit, scrollMode]);
+
+  const close = () => {
+    clearPreloaded();
+    onClose();
+  };
+
+  // 필기 포함 PDF 내보내기
+  const [exporting, setExporting] = useState(false);
+  const exportPdf = async () => {
+    if (exporting) return;
+    setExporting(true);
+    toast('PDF 만드는 중…', 60_000);
+    try {
+      await flushInk();
+      const { exportAnnotatedPdf } = await import('@/features/export/exportPdf');
+      const r = await exportAnnotatedPdf(meta.id);
+      toast(r.annotatedPages ? `필기 ${r.annotatedPages}쪽을 포함한 PDF를 만들었습니다.` : '필기가 없어 원본과 같은 PDF입니다.', 2500);
+      await saveFile(r.blob, r.filename);
+    } catch (err) {
+      console.error(err);
+      toast('PDF를 만들지 못했습니다.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const view = useMemo(() => stepToView(step, pageCount, layout), [step, pageCount, layout]);
   const anchor = scrollMode ? scrollPage : anchorPage(view);
 
@@ -188,7 +233,9 @@ function Viewer({ doc, onClose, setlist }: { doc: Loaded; onClose: () => void; s
     if (!autoCrop) return;
     const signal = { cancelled: false };
     void doc.crops.warmUp(signal);
-    return () => { signal.cancelled = true; };
+    return () => {
+      signal.cancelled = true;
+    };
   }, [autoCrop, doc.crops]);
 
   // 이어보기 위치 저장
@@ -428,7 +475,7 @@ function Viewer({ doc, onClose, setlist }: { doc: Loaded; onClose: () => void; s
       {/* 상단 바 + 필기 도구 막대 (필기 중에는 메뉴를 숨겨도 도구 막대는 남는다) */}
       <div className="absolute inset-x-0 top-0 z-10 flex flex-col">
         <header className={cn('flex items-center gap-1 bg-black/75 px-2 pt-safe pb-2 backdrop-blur-md sm:gap-2', !chrome && 'hidden')}>
-          <Button variant="bar" onClick={onClose} className="px-2 sm:px-4">
+          <Button variant="bar" onClick={close} className="px-2 sm:px-4">
             <ChevronLeft /> <span className="hidden sm:inline">{setlist ? '세트리스트' : '악보함'}</span>
           </Button>
           <div className="min-w-0 flex-1 text-center">
@@ -526,7 +573,24 @@ function Viewer({ doc, onClose, setlist }: { doc: Loaded; onClose: () => void; s
             <Keyboard />
           </Button>
 
-          <Button variant="bar" size="icon" aria-label={performanceMode ? '공연 모드 해제' : '공연 모드'} data-active={performanceMode} onClick={togglePerformance}>
+          <Button
+            variant="bar"
+            size="icon"
+            aria-label="필기 포함 PDF 내보내기"
+            title="필기 포함 PDF 내보내기"
+            disabled={exporting}
+            onClick={exportPdf}
+          >
+            {exporting ? <Loader2 className="animate-spin" /> : <Share />}
+          </Button>
+
+          <Button
+            variant="bar"
+            size="icon"
+            aria-label={performanceMode ? '공연 모드 해제' : '공연 모드'}
+            data-active={performanceMode}
+            onClick={togglePerformance}
+          >
             {performanceMode ? <Lock /> : <Unlock />}
           </Button>
 

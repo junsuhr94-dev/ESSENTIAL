@@ -143,6 +143,16 @@ export async function saveInk(scoreId: string, page: number, ink: PageInk | null
   else await database.delete('ink', key);
 }
 
+export async function deleteInkOf(scoreId: string) {
+  const tx = (await db()).transaction('ink', 'readwrite');
+  const keys = await tx.store.index('scoreId').getAllKeys(scoreId);
+  await Promise.all([...keys.map((k) => tx.store.delete(k)), tx.done]);
+}
+
+export async function listAllInk() {
+  return (await db()).getAll('ink');
+}
+
 // ---------------- 세트리스트 ----------------
 
 export async function listSetlists() {

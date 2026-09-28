@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FilePlus2, Library, ListMusic, MoreHorizontal, Pencil, RotateCcw, Search, Trash2 } from 'lucide-react';
+import { FilePlus2, FileOutput, Library, ListMusic, MoreHorizontal, Pencil, RotateCcw, Search, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { deleteScore, listScores, updateScore, type ScoreMeta, type Setlist } from '@/lib/db';
 import { SetlistsView } from '@/features/setlist/SetlistsView';
+import { BackupMenu } from '@/features/backup/BackupMenu';
+import { saveFile } from '@/lib/share';
 import { SMUFL } from '@/lib/smufl';
 import { cn } from '@/lib/utils';
 import { toast } from '@/stores/toast';
@@ -25,6 +27,7 @@ export function LibraryScreen({ onOpen, onPlaySetlist, tab, onTabChange }: Props
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortKey>('recent');
   const [dragging, setDragging] = useState(false);
+  const [version, setVersion] = useState(0);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => setScores(await listScores()), []);
@@ -71,45 +74,53 @@ export function LibraryScreen({ onOpen, onPlaySetlist, tab, onTabChange }: Props
             <p className="text-xs text-muted-foreground">라이브 & 세션 연주자를 위한 악보 뷰어</p>
           </div>
         </div>
-        {tab === 'scores' && (
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="relative">
-              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+        <div className="flex flex-wrap items-center gap-2">
+          {tab === 'scores' && (
+            <>
+              <label className="relative">
+                <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="제목 검색"
+                  className="h-10 w-48 rounded-md border bg-card pr-3 pl-9 text-sm outline-none focus:ring-2 focus:ring-ring/50 sm:w-60"
+                />
+              </label>
+              <select
+                value={sort}
+                onChange={(e) => setSort(e.target.value as SortKey)}
+                className="h-10 rounded-md border bg-card px-3 text-sm"
+                aria-label="정렬"
+              >
+                <option value="recent">최근 연 순</option>
+                <option value="title">제목 순</option>
+                <option value="added">추가한 순</option>
+              </select>
+              <Button onClick={() => fileInput.current?.click()}>
+                <FilePlus2 /> 악보 가져오기
+              </Button>
               <input
-                type="search"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="제목 검색"
-                className="h-10 w-48 rounded-md border bg-card pr-3 pl-9 text-sm outline-none focus:ring-2 focus:ring-ring/50 sm:w-60"
+                ref={fileInput}
+                type="file"
+                accept="application/pdf,.pdf,image/*"
+                multiple
+                hidden
+                onChange={(e) => {
+                  const files = [...(e.target.files ?? [])];
+                  e.target.value = '';
+                  void handleFiles(files);
+                }}
               />
-            </label>
-            <select
-              value={sort}
-              onChange={(e) => setSort(e.target.value as SortKey)}
-              className="h-10 rounded-md border bg-card px-3 text-sm"
-              aria-label="정렬"
-            >
-              <option value="recent">최근 연 순</option>
-              <option value="title">제목 순</option>
-              <option value="added">추가한 순</option>
-            </select>
-            <Button onClick={() => fileInput.current?.click()}>
-              <FilePlus2 /> 악보 가져오기
-            </Button>
-            <input
-              ref={fileInput}
-              type="file"
-              accept="application/pdf,.pdf,image/*"
-              multiple
-              hidden
-              onChange={(e) => {
-                const files = [...(e.target.files ?? [])];
-                e.target.value = '';
-                void handleFiles(files);
-              }}
-            />
-          </div>
-        )}
+            </>
+          )}
+          <BackupMenu
+            onRestored={() => {
+              void refresh();
+              setVersion((v) => v + 1);
+            }}
+          />
+        </div>
       </header>
 
       <div className="mx-auto mb-5 max-w-7xl">
@@ -123,7 +134,7 @@ export function LibraryScreen({ onOpen, onPlaySetlist, tab, onTabChange }: Props
         </ToggleGroup>
       </div>
 
-      {tab === 'setlists' && <SetlistsView onPlay={onPlaySetlist} />}
+      {tab === 'setlists' && <SetlistsView key={version} onPlay={onPlaySetlist} />}
       {tab === 'scores' && (
         <>
           {scores && scores.length === 0 && (
@@ -176,6 +187,18 @@ function ScoreCard({ score, onOpen, onChanged }: { score: ScoreMeta; onOpen: () 
     toast('삭제했습니다.');
     onChanged();
   };
+  const exportPdf = async () => {
+    toast('PDF 만드는 중…', 60_000);
+    try {
+      const { exportAnnotatedPdf } = await import('@/features/export/exportPdf');
+      const r = await exportAnnotatedPdf(score.id);
+      toast(r.annotatedPages ? `필기 ${r.annotatedPages}쪽을 포함한 PDF를 만들었습니다.` : '필기가 없어 원본과 같은 PDF입니다.', 2500);
+      await saveFile(r.blob, r.filename);
+    } catch (err) {
+      console.error(err);
+      toast('PDF를 만들지 못했습니다.');
+    }
+  };
   const restart = async () => {
     await updateScore(score.id, { lastPage: 1 });
     onOpen();
@@ -207,6 +230,9 @@ function ScoreCard({ score, onOpen, onChanged }: { score: ScoreMeta; onOpen: () 
           <DropdownMenuContent align="end">
             <DropdownMenuItem onSelect={rename}>
               <Pencil /> 이름 바꾸기
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={exportPdf}>
+              <FileOutput /> 필기 포함 PDF 내보내기
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={restart}>
               <RotateCcw /> 처음부터 보기
