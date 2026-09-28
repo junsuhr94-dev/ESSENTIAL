@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, Columns2, Keyboard, Loader2, MoveHorizontal, MoveVertical, RectangleVertical, SplitSquareVertical, Zap } from 'lucide-react';
+import {
+  ChevronLeft,
+  Columns2,
+  Keyboard,
+  Loader2,
+  MoveHorizontal,
+  MoveVertical,
+  PenLine,
+  RectangleVertical,
+  SplitSquareVertical,
+  Zap,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -22,10 +33,14 @@ import {
   nextStep,
   pageToStep,
   stepToView,
+  visiblePages,
   type Layout,
 } from '@/core/navigation/navigator';
 import type { PedalAction } from '@/core/pedal/keymap';
-import { getScore, getScoreFiles, updateScore, type ScoreMeta } from '@/lib/db';
+import { getScore, getScoreFiles, loadInk, updateScore, type ScoreMeta } from '@/lib/db';
+import { penRecentlyActive } from '@/core/input/penActivity';
+import { flushInk, useInk } from '@/stores/ink';
+import { InkToolbar } from '@/features/ink/InkToolbar';
 import { cn } from '@/lib/utils';
 import { useElementSize } from '@/hooks/useElementSize';
 import { usePageTurner } from '@/hooks/usePageTurner';
@@ -53,11 +68,12 @@ export function ViewerScreen({ scoreId, onClose }: { scoreId: string; onClose: (
     let cancelled = false;
     let loaded: Loaded | null = null;
     (async () => {
-      const [meta, blobs] = await Promise.all([getScore(scoreId), getScoreFiles(scoreId)]);
+      const [meta, blobs, ink] = await Promise.all([getScore(scoreId), getScoreFiles(scoreId), loadInk(scoreId)]);
       if (!meta || !blobs?.length) throw new Error('missing score');
       const source = await openSource(meta.kind, blobs);
       loaded = { meta, source, cache: new RenderCache(source, CACHE_CAPACITY) };
       if (cancelled) return dispose(loaded);
+      useInk.getState().load(scoreId, ink);
       setDoc(loaded);
       void updateScore(scoreId, { openedAt: Date.now() });
     })().catch((err) => {
@@ -82,6 +98,8 @@ export function ViewerScreen({ scoreId, onClose }: { scoreId: string; onClose: (
 }
 
 function dispose({ source, cache }: Loaded) {
+  void flushInk();
+  useInk.getState().unload();
   cache.destroy();
   source.destroy();
 }
@@ -113,6 +131,8 @@ function Viewer({ doc, onClose }: { doc: Loaded; onClose: () => void }) {
   const [scrollPage, setScrollPage] = useState(meta.lastPage || 1);
   const [chrome, setChrome] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const annotating = useInk((s) => s.annotating);
+  const setAnnotating = useInk((s) => s.setAnnotating);
   const [sliderPreview, setSliderPreview] = useState<number | null>(null);
   const scrollRef = useRef<ScrollViewHandle>(null);
 
@@ -138,7 +158,8 @@ function Viewer({ doc, onClose }: { doc: Loaded; onClose: () => void }) {
   const turn = useCallback(
     (dir: 1 | -1) => {
       if (scrollMode) {
-        if (dir > 0) scrollRef.current?.next(); else scrollRef.current?.prev();
+        if (dir > 0) scrollRef.current?.next();
+        else scrollRef.current?.prev();
         return;
       }
       setStep((k) => {
@@ -181,7 +202,12 @@ function Viewer({ doc, onClose }: { doc: Loaded; onClose: () => void }) {
   // ---- 터치: 좌우 탭 / 스와이프 / 가운데 탭 ----
   const gesture = useRef<{ id: number; x: number; y: number; t: number; multi: boolean } | null>(null);
   const onPointerDown = (e: React.PointerEvent) => {
-    if (gesture.current) { gesture.current.multi = true; return; }
+    // Apple Pencil 로 쓰는 중에 닿은 손바닥은 무시
+    if (e.pointerType === 'touch' && penRecentlyActive(e.timeStamp)) return;
+    if (gesture.current) {
+      gesture.current.multi = true;
+      return;
+    }
     gesture.current = { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp, multi: false };
   };
   const onPointerUp = (e: React.PointerEvent) => {
@@ -214,7 +240,9 @@ function Viewer({ doc, onClose }: { doc: Loaded; onClose: () => void }) {
         style={{ touchAction: scrollMode ? (turnMode === 'scroll-h' ? 'pan-x' : 'pan-y') : 'none' }}
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
-        onPointerCancel={() => { gesture.current = null; }}
+        onPointerCancel={() => {
+          gesture.current = null;
+        }}
         onContextMenu={(e) => e.preventDefault()}
       >
         {scrollMode ? (
@@ -235,58 +263,68 @@ function Viewer({ doc, onClose }: { doc: Loaded; onClose: () => void }) {
         )}
       </div>
 
-      {/* 상단 바 */}
-      <header
-        className={cn(
-          'absolute inset-x-0 top-0 z-10 flex items-center gap-2 bg-black/75 px-2 pt-safe pb-2 backdrop-blur-md transition-all duration-200',
-          !chrome && 'pointer-events-none -translate-y-full opacity-0',
+      {/* 상단 바 + 필기 도구 막대 (필기 중에는 메뉴를 숨겨도 도구 막대는 남는다) */}
+      <div className="absolute inset-x-0 top-0 z-10 flex flex-col">
+        <header
+          className={cn('flex items-center gap-2 bg-black/75 px-2 pt-safe pb-2 backdrop-blur-md transition-all duration-200', !chrome && 'hidden')}
+        >
+          <Button variant="bar" onClick={onClose}>
+            <ChevronLeft /> 악보함
+          </Button>
+          <div className="min-w-0 flex-1 truncate text-center font-semibold">{meta.title}</div>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="bar" aria-label="넘김 방식">
+                <TurnIcon /> <span className="hidden sm:inline">{TURN_MODE_LABELS[turnMode].title}</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-72">
+              <DropdownMenuLabel>페이지 넘김 방식</DropdownMenuLabel>
+              <DropdownMenuRadioGroup value={turnMode} onValueChange={(v) => changeTurnMode(v as TurnMode)}>
+                {(Object.keys(TURN_MODE_LABELS) as TurnMode[]).map((m) => (
+                  <DropdownMenuRadioItem key={m} value={m} className="flex-col items-start gap-0">
+                    <span>{TURN_MODE_LABELS[m].title}</span>
+                    <span className="text-xs text-muted-foreground">{TURN_MODE_LABELS[m].desc}</span>
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="bar" aria-label="페이지 배치" disabled={scrollMode}>
+                {layout === 'double' ? <Columns2 /> : <RectangleVertical />}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>페이지 배치</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuRadioGroup value={layoutPref} onValueChange={(v) => set({ layout: v as LayoutPref })}>
+                {(Object.keys(LAYOUT_LABELS) as LayoutPref[]).map((l) => (
+                  <DropdownMenuRadioItem key={l} value={l}>
+                    {LAYOUT_LABELS[l]}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <Button variant="bar" size="icon" aria-label="페달 & 보기 설정" onClick={() => setSettingsOpen(true)}>
+            <Keyboard />
+          </Button>
+
+          <Button variant="bar" data-active={annotating} aria-pressed={annotating} onClick={() => setAnnotating(!annotating)}>
+            <PenLine /> <span className="hidden sm:inline">필기</span>
+          </Button>
+        </header>
+        {annotating && (
+          <div className={cn(!chrome && 'bg-black/70 pt-safe')}>
+            <InkToolbar visiblePages={scrollMode ? [scrollPage] : visiblePages(view)} onReveal={goToPage} />
+          </div>
         )}
-      >
-        <Button variant="bar" onClick={onClose}>
-          <ChevronLeft /> 악보함
-        </Button>
-        <div className="min-w-0 flex-1 truncate text-center font-semibold">{meta.title}</div>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="bar" aria-label="넘김 방식">
-              <TurnIcon /> <span className="hidden sm:inline">{TURN_MODE_LABELS[turnMode].title}</span>
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-72">
-            <DropdownMenuLabel>페이지 넘김 방식</DropdownMenuLabel>
-            <DropdownMenuRadioGroup value={turnMode} onValueChange={(v) => changeTurnMode(v as TurnMode)}>
-              {(Object.keys(TURN_MODE_LABELS) as TurnMode[]).map((m) => (
-                <DropdownMenuRadioItem key={m} value={m} className="flex-col items-start gap-0">
-                  <span>{TURN_MODE_LABELS[m].title}</span>
-                  <span className="text-xs text-muted-foreground">{TURN_MODE_LABELS[m].desc}</span>
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="bar" aria-label="페이지 배치" disabled={scrollMode}>
-              {layout === 'double' ? <Columns2 /> : <RectangleVertical />}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuLabel>페이지 배치</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuRadioGroup value={layoutPref} onValueChange={(v) => set({ layout: v as LayoutPref })}>
-              {(Object.keys(LAYOUT_LABELS) as LayoutPref[]).map((l) => (
-                <DropdownMenuRadioItem key={l} value={l}>{LAYOUT_LABELS[l]}</DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <Button variant="bar" size="icon" aria-label="페달 & 보기 설정" onClick={() => setSettingsOpen(true)}>
-          <Keyboard />
-        </Button>
-      </header>
+      </div>
 
       {/* 페이지 표시 */}
       <div

@@ -4,6 +4,7 @@ import type { ScoreSource } from '@/core/document/types';
 import type { RenderCache } from '@/core/render/renderCache';
 import type { PagedView as View } from '@/core/navigation/navigator';
 import { CanvasHost } from './CanvasHost';
+import { InkLayer } from '@/features/ink/InkLayer';
 import { layoutFrame, renderDpr, resolveFrame, type Frame } from './frame';
 
 interface Props {
@@ -68,6 +69,14 @@ export function PagedView({ source, cache, view, neighbors, width, height, split
           {slot.layers.map((l) => (
             <div key={l.key} className="absolute inset-x-0 overflow-hidden" style={{ top: l.top, height: l.height }}>
               {l.canvas && <CanvasHost canvas={l.canvas} className="absolute inset-x-0" style={l.align === 'top' ? { top: 0 } : { bottom: 0 }} />}
+              {/* 필기 레이어도 페이지와 같은 위치·크기로 맞춰, 반 페이지 넘김 중에도 각 페이지의 필기가 제자리에 보인다 */}
+              <div
+                key={`ink-${l.page}`}
+                className="absolute inset-x-0"
+                style={{ height: l.pageH, ...(l.align === 'top' ? { top: 0 } : { bottom: 0 }) }}
+              >
+                <InkLayer page={l.page} width={l.cssW} height={l.pageH} raster={l.canvas} />
+              </div>
             </div>
           ))}
           {slot.divider != null && <HalfDivider y={slot.divider} upper={slot.layers[0].page} lower={slot.layers[1].page} />}

@@ -12,6 +12,8 @@ export interface Layer {
   /** 페이지의 윗부분(top) 또는 아랫부분(bottom)을 맞춰 보여준다 */
   align: 'top' | 'bottom';
   cssW: number;
+  /** 페이지 전체 높이(CSS px) — 필기 레이어 크기 */
+  pageH: number;
   canvas?: HTMLCanvasElement;
 }
 
@@ -38,11 +40,13 @@ export async function layoutFrame(source: ScoreSource, view: PagedView, stageW: 
   if (view.layout === 'single') {
     if (view.kind === 'full') {
       const { width, height } = fit(await source.getPageSize(view.page), stageW, stageH);
-      return { slots: [{ key: 'single', width, height, layers: [{ key: 'full', page: view.page, top: 0, height, align: 'top', cssW: width }] }] };
+      return { slots: [{ key: 'single', width, height, layers: [{ key: 'full', page: view.page, top: 0, height, align: 'top', cssW: width, pageH: height }] }] };
     }
     // 반 넘김: 새 페이지(top)의 크기에 맞춘 한 슬롯을 위/아래로 나눈다.
     const { width, height } = fit(await source.getPageSize(view.top), stageW, stageH);
     const cut = Math.round(height * split);
+    const lower = await source.getPageSize(view.bottom);
+    const lowerH = Math.round((lower.height / lower.width) * width);
     return {
       slots: [{
         key: 'single',
@@ -50,8 +54,8 @@ export async function layoutFrame(source: ScoreSource, view: PagedView, stageW: 
         height,
         divider: cut,
         layers: [
-          { key: 'upper', page: view.top, top: 0, height: cut, align: 'top', cssW: width },
-          { key: 'lower', page: view.bottom, top: cut, height: height - cut, align: 'bottom', cssW: width },
+          { key: 'upper', page: view.top, top: 0, height: cut, align: 'top', cssW: width, pageH: height },
+          { key: 'lower', page: view.bottom, top: cut, height: height - cut, align: 'bottom', cssW: width, pageH: lowerH },
         ],
       }],
     };
@@ -72,7 +76,7 @@ export async function layoutFrame(source: ScoreSource, view: PagedView, stageW: 
         key: i === 0 ? 'left' : 'right',
         width,
         height,
-        layers: page == null ? [] : [{ key: 'full', page, top: 0, height, align: 'top' as const, cssW: width }],
+        layers: page == null ? [] : [{ key: 'full', page, top: 0, height, align: 'top' as const, cssW: width, pageH: height }],
       };
     }),
   };

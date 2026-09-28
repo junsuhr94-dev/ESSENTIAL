@@ -46,6 +46,8 @@ export default defineConfig({
   },
   build: {
     target: ['es2022', 'safari16'],
+    // 앱 전체가 오프라인 프리캐시되므로 첫 로드 이후 크기 영향이 작다(Konva 포함 ~620KB).
+    chunkSizeWarningLimit: 800,
   },
   test: {
     environment: 'node',

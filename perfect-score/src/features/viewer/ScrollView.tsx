@@ -2,6 +2,7 @@ import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
 import type { PageSize, ScoreSource } from '@/core/document/types';
 import type { RenderCache } from '@/core/render/renderCache';
 import { CanvasHost } from './CanvasHost';
+import { InkLayer } from '@/features/ink/InkLayer';
 import { renderDpr } from './frame';
 
 export interface ScrollViewHandle {
@@ -198,6 +199,7 @@ export function ScrollView({ ref, source, cache, direction, width, height, initi
               style={{ left: p.x, top: p.y, width: p.w, height: p.h, scrollSnapAlign: direction === 'horizontal' ? 'center' : undefined }}
             >
               {canvas && <CanvasHost canvas={canvas} />}
+              {canvas && <InkLayer page={p.page} width={p.w} height={p.h} raster={canvas} />}
             </div>
           );
         })}
