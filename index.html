@@ -1,86 +1,20 @@
 <!doctype html>
 <html lang="ko">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <title>악보 뷰어</title>
-  <meta name="description" content="아이패드용 PDF 악보 뷰어 — 페이지 넘김, 블루투스 페달, Apple Pencil 필기 지원">
-  <meta name="theme-color" content="#1f2430">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="악보">
-  <link rel="manifest" href="manifest.webmanifest">
-  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="css/app.css">
-</head>
-<body>
-  <!-- 악보함 -->
-  <section id="library" class="screen">
-    <header class="lib-header">
-      <h1>악보함</h1>
-      <div class="lib-actions">
-        <input id="search" type="search" placeholder="제목 검색" autocomplete="off">
-        <select id="sort" aria-label="정렬">
-          <option value="recent">최근 연 순</option>
-          <option value="title">제목 순</option>
-          <option value="added">추가한 순</option>
-        </select>
-        <label class="btn primary" for="file-input">＋ PDF 가져오기</label>
-        <input id="file-input" type="file" accept="application/pdf,.pdf" multiple hidden>
-      </div>
-    </header>
-    <div id="install-hint" class="hint" hidden>
-      Safari 공유 버튼 → <b>홈 화면에 추가</b>로 설치하면 전체 화면으로 쓰고, 오프라인에서도 열리며 악보가 자동 삭제되지 않습니다.
-      <button class="link" id="install-hint-close">닫기</button>
-    </div>
-    <div id="grid" class="grid"></div>
-    <div id="empty" class="empty" hidden>
-      <div class="empty-icon">𝄞</div>
-      <p>아직 악보가 없습니다.</p>
-      <p class="muted">“＋ PDF 가져오기”로 파일 앱이나 iCloud Drive의 PDF 악보를 추가하세요.</p>
-    </div>
-    <div id="drop-overlay" hidden>PDF를 여기에 놓으세요</div>
-  </section>
-
-  <!-- 악보 보기 -->
-  <section id="viewer" class="screen" hidden>
-    <div id="stage"><div id="spread"></div></div>
-
-    <header id="viewer-bar" class="bar">
-      <button class="icon-btn" id="back" aria-label="악보함으로">‹ 악보함</button>
-      <div id="viewer-title" class="bar-title"></div>
-      <div class="bar-group">
-        <button class="icon-btn" id="layout-btn" aria-label="페이지 배치"></button>
-        <button class="icon-btn" id="annotate-btn" aria-label="필기">✎ 필기</button>
-      </div>
-    </header>
-
-    <div id="ink-bar" class="bar ink-bar" hidden>
-      <div class="bar-group" role="radiogroup" aria-label="도구">
-        <button class="tool" data-tool="pen" aria-label="펜">✒︎</button>
-        <button class="tool" data-tool="highlighter" aria-label="형광펜">▍</button>
-        <button class="tool" data-tool="eraser" aria-label="지우개">⌫</button>
-      </div>
-      <div class="bar-group" id="colors"></div>
-      <div class="bar-group" id="sizes"></div>
-      <div class="bar-group">
-        <button class="icon-btn" id="undo" aria-label="실행 취소">↶</button>
-        <button class="icon-btn" id="redo" aria-label="다시 실행">↷</button>
-        <button class="icon-btn" id="clear-page" aria-label="이 페이지 필기 지우기">🗑</button>
-        <label class="toggle"><input type="checkbox" id="finger-draw"> 손가락 필기</label>
-      </div>
-    </div>
-
-    <div id="page-indicator"></div>
-    <div id="page-jump" class="bar page-jump">
-      <input id="page-slider" type="range" min="1" max="1" value="1" aria-label="페이지 이동">
-    </div>
-  </section>
-
-  <div id="toast" role="status" aria-live="polite"></div>
-
-  <script type="module" src="js/app.js"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <title>Perfect Score</title>
+    <meta name="description" content="라이브 공연·세션 연주자를 위한 iPad 악보 뷰어 & 스마트 필기" />
+    <meta name="theme-color" content="#0b0c10" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Perfect Score" />
+    <link rel="icon" href="icons/favicon-64.png" type="image/png" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>
